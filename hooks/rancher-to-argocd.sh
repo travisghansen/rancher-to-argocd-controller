@@ -48,10 +48,11 @@ userToken=$(echo "$token" | jq -crM '.token')
 
 # iterate rancher clusters and create corresponding argocd clusters
 for cluster in $(kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]'); do
-  echo "handling cluster: ${cluster}"
   clusterResourceName=$(echo "${cluster}" | jq -crM '.metadata.name')
+  echo "handling cluster: ${clusterResourceName}"
 
   if [[ -z "${clusterResourceName}" ]];then
+    echo "empty cluster, moving on"
     continue;
   fi
 
