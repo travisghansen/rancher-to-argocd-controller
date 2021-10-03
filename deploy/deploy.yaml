@@ -93,4 +93,4 @@ spec:
             - name: ENVIRONMENT_ID
               value: "dev"
             - name: RANCHER_URI
-              value: "https://rancher.svc.dev.adcinternal.com"
+              value: "https://rancher.example.com"
