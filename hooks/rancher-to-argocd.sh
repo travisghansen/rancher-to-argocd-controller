@@ -12,7 +12,7 @@ set -e
 : ${SECRET_NAME_SUFFIX:=""}
 : ${ARGOCD_NAMESPACE:=argocd}
 
-if [[ $1 == "--config" ]] ; then
+if [[ $1 == "--config" ]]; then
   cat <<EOF
 configVersion: v1
 kubernetes:
@@ -27,12 +27,12 @@ EOF
   exit 0
 fi
 
-if [[ -z "${RANCHER_URI}" ]];then
+if [[ -z "${RANCHER_URI}" ]]; then
   echo "RANCHER_URI must be set"
   exit 1
 fi
 
-if [[ -z "${ENVIRONMENT_ID}" ]];then
+if [[ -z "${ENVIRONMENT_ID}" ]]; then
   echo "ENVIRONMENT_ID must be set"
   exit 1
 fi
@@ -47,13 +47,13 @@ tokenResourceName=$(echo "$token" | jq -crM '.metadata.name')
 userToken=$(echo "$token" | jq -crM '.token')
 
 # iterate rancher clusters and create corresponding argocd clusters
-for cluster in $(kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]'); do
+kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]' | while read -r cluster; do
   clusterResourceName=$(echo "${cluster}" | jq -crM '.metadata.name')
   echo "handling cluster: ${clusterResourceName}"
 
-  if [[ -z "${clusterResourceName}" ]];then
+  if [[ -z "${clusterResourceName}" ]]; then
     echo "empty cluster, moving on"
-    continue;
+    continue
   fi
 
   displayName=$(echo "${cluster}" | jq -crM '.spec.displayName')
