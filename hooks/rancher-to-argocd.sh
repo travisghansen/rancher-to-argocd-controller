@@ -48,6 +48,8 @@ userToken=$(echo "$token" | jq -crM '.token')
 
 # iterate rancher clusters and create corresponding argocd clusters
 kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]' | while read -r cluster; do
+  # removing this label so rancher does not remove the secret immediately thinking it owns the secret
+  cluster=$(echo "${cluster}" | jq -crM 'del(.metadata.labels."objectset.rio.cattle.io/hash")')
   clusterResourceName=$(echo "${cluster}" | jq -crM '.metadata.name')
   echo "handling cluster: ${clusterResourceName}"
 
@@ -57,10 +59,11 @@ kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]' | while r
   fi
 
   displayName=$(echo "${cluster}" | jq -crM '.spec.displayName')
+  echo "cluster ${clusterResourceName} display name: ${displayName}"
   caCert=$(echo "${cluster}" | jq -crM '.status.caCert')
   clusterLabels=$(echo "${cluster}" | yq eval '.metadata.labels' - -P | sed "s/^/    /g")
-
-  cat <<EOF | kubectl -n "${ARGOCD_NAMESPACE}" apply -f -
+  SECRET_YAML=$(
+    cat <<EOF
 ---
 apiVersion: v1
 kind: Secret
@@ -86,5 +89,10 @@ stringData:
     }
 
 EOF
+  )
+
+  #echo "${SECRET_YAML}"
+  #continue
+  echo "${SECRET_YAML}" | kubectl -n "${ARGOCD_NAMESPACE}" apply -f -
 
 done
