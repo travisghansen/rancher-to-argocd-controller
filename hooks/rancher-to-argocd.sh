@@ -5,6 +5,7 @@ set -e
 
 # meant to be configured externally at launch time
 : ${ENVIRONMENT_ID:=""}
+: ${REGION_ID:=""}
 : ${SERVER_NAME_PREFIX:=${ENVIRONMENT_ID}-}
 : ${SERVER_NAME_SUFFIX:=""}
 : ${RANCHER_URI:=""}
@@ -74,6 +75,7 @@ ${clusterLabels}
     argocd.argoproj.io/secret-type: cluster
     clusterId: "${displayName}"
     environmentId: "${ENVIRONMENT_ID}"
+    regionId: "${REGION_ID}"
     rancherImported: "true"
 type: Opaque
 stringData:
