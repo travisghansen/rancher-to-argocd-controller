@@ -8,10 +8,27 @@ set -e
 : ${REGION_ID:=""}
 : ${SERVER_NAME_PREFIX:=${ENVIRONMENT_ID}-}
 : ${SERVER_NAME_SUFFIX:=""}
-: ${RANCHER_URI:=""}
+
 : ${SECRET_NAME_PREFIX:="argocd-cluster-"}
 : ${SECRET_NAME_SUFFIX:=""}
 : ${ARGOCD_NAMESPACE:=argocd}
+
+: ${RANCHER_URI:="https://rancher.cattle-system"}
+# K8S_CA_DATA takes precedence over these
+# dynamically pull the CA data from cluster secret
+: ${RANCHER_CA_SECRET_NAME:=""}
+: ${RANCHER_CA_SECRET_NS:=""}
+: ${RANCHER_CA_SECRET_KEY:="tls.crt"}
+
+# user-supplied K8S connection details
+: ${K8S_TOKEN:=""}
+# https://ranchermanager.docs.rancher.com/getting-started/installation-and-upgrade/resources/add-tls-secrets
+# should be base64 cert if supplied
+# kubectl -n cattle-system get secrets tls-rancher-internal-ca -o json | jq -crM '.data."tls.crt"'
+# not sure what this CA is
+# kubectl -n cattle-system get secrets tls-ca -o json | jq -crM '.data."root_ca.pem"'
+: ${K8S_CA_DATA:=""}
+: ${K8S_INSECURE:="false"}
 
 if [[ $1 == "--config" ]]; then
   cat <<EOF
@@ -40,12 +57,46 @@ fi
 
 #env
 
-# gather up info for secret creation
-user=$(kubectl get users.management.cattle.io -o json -l 'authz.management.cattle.io/bootstrapping=admin-user' | jq -crM '.items[0]')
-userResourceName=$(echo "$user" | jq -crM '.metadata.name')
-token=$(kubectl get tokens.management.cattle.io -o json -l "authn.management.cattle.io/token-userId=${userResourceName}" | jq -crM '.items[0]')
-tokenResourceName=$(echo "$token" | jq -crM '.metadata.name')
-userToken=$(echo "$token" | jq -crM '.token')
+# fetch CA data from cluster
+if [[ -n "${RANCHER_CA_SECRET_NAME}" && -z "${K8S_CA_DATA}" ]]; then
+  [[ -n "${RANCHER_CA_SECRET_NS}" ]] && {
+    NS_ARGS="-n ${RANCHER_CA_SECRET_NS}"
+  }
+
+  K8S_CA_DATA=$(kubectl ${NS_ARGS} get secrets ${RANCHER_CA_SECRET_NAME} -o json | jq -crM ".data.\"${RANCHER_CA_SECRET_KEY}\"")
+
+  if [[ -z "${K8S_CA_DATA}" ]]; then
+    echo "failed to retrieve K8S_CA_DATA using secret ${RANCHER_CA_SECRET_NS}/${RANCHER_CA_SECRET_NAME}"
+    exit 1
+  fi
+
+  echo "properly fetched caData from secret"
+fi
+
+if [[ -z "${K8S_TOKEN}" ]]; then
+  # gather up info for secret creation
+  user=$(kubectl get users.management.cattle.io -o json -l 'authz.management.cattle.io/bootstrapping=admin-user' | jq -crM '.items[0]')
+  userResourceName=$(echo "$user" | jq -crM '.metadata.name')
+  token=$(kubectl get tokens.management.cattle.io -o json -l "authn.management.cattle.io/token-userId=${userResourceName}" | jq -crM '.items[0]')
+  tokenResourceName=$(echo "$token" | jq -crM '.metadata.name')
+  userToken=$(echo "$token" | jq -crM '.token')
+
+  #userToken="null"
+  #tokenResourceName="null"
+  # sanity check the data
+  if [[ "${userToken}" == "null" || "${tokenResourceName}" == "null" ]]; then
+    echo "failed to properly retrive bearerToken from rancher crds"
+    exit 1
+  fi
+
+  K8S_TOKEN="${tokenResourceName}:${userToken}"
+  echo "properly fetched bearerToken from rancher crds"
+fi
+
+if [[ -z "${K8S_TOKEN}" ]]; then
+  echo "empty bearerToken"
+  exit 1
+fi
 
 # iterate rancher clusters and create corresponding argocd clusters
 kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]' | while read -r cluster; do
@@ -61,6 +112,7 @@ kubectl get clusters.management.cattle.io -o json | jq -crM '.items[]' | while r
 
   displayName=$(echo "${cluster}" | jq -crM '.spec.displayName')
   echo "cluster ${clusterResourceName} display name: ${displayName}"
+  # this is kube-ca
   caCert=$(echo "${cluster}" | jq -crM '.status.caCert')
   clusterLabels=$(echo "${cluster}" | yq eval '.metadata.labels' - -P | sed "s/^/    /g")
   SECRET_YAML=$(
@@ -83,10 +135,10 @@ stringData:
   server: "${RANCHER_URI}/k8s/clusters/${clusterResourceName}"
   config: |
     {
-      "bearerToken": "${tokenResourceName}:${userToken}",
+      "bearerToken": "${K8S_TOKEN}",
       "tlsClientConfig": {
-        "insecure": false,
-        "caData": ""
+        "insecure": ${K8S_INSECURE},
+        "caData": "${K8S_CA_DATA}"
       }
     }
 

@@ -20,6 +20,14 @@ rules:
       - "get"
       - "watch"
       - "list"
+# if you want it to automatically fetch secret data from another namespace
+# ie: rancher tls ca
+#  - apiGroups:
+#      - ""
+#    resources:
+#      - "secrets"
+#    verbs:
+#      - "get"
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
