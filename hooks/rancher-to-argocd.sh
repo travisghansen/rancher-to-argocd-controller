@@ -77,7 +77,7 @@ if [[ -z "${K8S_TOKEN}" ]]; then
   # gather up info for secret creation
   user=$(kubectl get users.management.cattle.io -o json -l 'authz.management.cattle.io/bootstrapping=admin-user' | jq -crM '.items[0]')
   userResourceName=$(echo "$user" | jq -crM '.metadata.name')
-  token=$(kubectl get tokens.management.cattle.io -o json -l "authn.management.cattle.io/token-userId=${userResourceName}" | jq -crM '.items[0]')
+  token=$(kubectl get tokens.management.cattle.io -o json -l "authn.management.cattle.io/token-userId=${userResourceName},authn.management.cattle.io/kind=kubeconfig" | jq -crM '.items[0]')
   tokenResourceName=$(echo "$token" | jq -crM '.metadata.name')
   userToken=$(echo "$token" | jq -crM '.token')
 
