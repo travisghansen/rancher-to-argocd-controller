@@ -1,3 +1,11 @@
+# v0.4.0
+
+Released 2025-06-23
+
+- support syncing argocd projects to rancher projects
+- support assigning namespaces to rancher projects
+- minor fixes and version bumps
+
 # v0.3.2
 
 Released 2023-06-15
