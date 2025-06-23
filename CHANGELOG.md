@@ -1,3 +1,9 @@
+# v0.4.2
+
+Released 2025-06-23
+
+- properly support discovery of CA data for use with `remote` cluster operations
+
 # v0.4.1
 
 Released 2025-06-23

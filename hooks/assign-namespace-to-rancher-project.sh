@@ -88,7 +88,7 @@ fi
 
 # sanely handle 'remote' cluster CA
 if [[ -n "${K8S_CA_DATA}" ]]; then
-  echo "${K8S_CA_DATA}" >/tmp/rancher-ca-tls.crt
+  echo "${K8S_CA_DATA}" | base64 -d >/tmp/rancher-ca-tls.crt
   K8S_EXTRA_ARGS+=" --certificate-authority=/tmp/rancher-ca-tls.crt "
 fi
 
