@@ -31,6 +31,7 @@ set -e
 # kubectl -n cattle-system get secrets tls-ca -o json | jq -crM '.data."root_ca.pem"'
 : ${K8S_CA_DATA:=""}
 : ${K8S_INSECURE:="false"}
+: ${K8S_EXTRA_ARGS:=""}
 
 # https://github.com/flant/shell-operator/issues/726
 if [[ $1 == "--config" ]]; then
@@ -83,6 +84,12 @@ if [[ -n "${RANCHER_CA_SECRET_NAME}" && -z "${K8S_CA_DATA}" ]]; then
   fi
 
   echo "properly fetched caData from secret"
+fi
+
+# sanely handle 'remote' cluster CA
+if [[ -n "${K8S_CA_DATA}" ]]; then
+  echo "${K8S_CA_DATA}" >/tmp/rancher-ca-tls.crt
+  K8S_EXTRA_ARGS+=" --certificate-authority=/tmp/rancher-ca-tls.crt "
 fi
 
 if [[ -z "${K8S_TOKEN}" ]]; then
@@ -146,7 +153,8 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
   # this is kube-ca
   caCert=$(echo "${cluster}" | jq -crM '.status.caCert')
 
-  NAMESPACES=$(kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" get ns -o json)
+  #
+  NAMESPACES=$(kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" ${K8S_EXTRA_ARGS} get ns -o json)
 
   echo $NAMESPACES | jq -crM '.items[]' | while read -r namespace; do
     nsName=$(echo "${namespace}" | jq -crM '.metadata.name')
@@ -219,9 +227,9 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
         :
         echo "joining namespace ${nsName} to project ${projectName} (${rancherProjectId})"
         # set the label
-        kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" label --overwrite ns "${nsName}" "field.cattle.io/projectId=${rancherProjectId}"
+        kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" ${K8S_EXTRA_ARGS} label --overwrite ns "${nsName}" "field.cattle.io/projectId=${rancherProjectId}"
         # set the annotation
-        kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" annotate --overwrite ns "${nsName}" "field.cattle.io/projectId=${clusterResourceName}:${rancherProjectId}"
+        kubectl --server="${RANCHER_URI}/k8s/clusters/${clusterResourceName}" --token="${K8S_TOKEN}" --insecure-skip-tls-verify="${K8S_INSECURE}" ${K8S_EXTRA_ARGS} annotate --overwrite ns "${nsName}" "field.cattle.io/projectId=${clusterResourceName}:${rancherProjectId}"
       fi
     fi
   done
