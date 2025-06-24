@@ -1,3 +1,9 @@
+# v0.4.3
+
+Released 2025-06-24
+
+- performance improvements and throttling/grouping/queing
+
 # v0.4.2
 
 Released 2025-06-23

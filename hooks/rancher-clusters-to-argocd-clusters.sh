@@ -39,18 +39,27 @@ set -e
 : ${K8S_INSECURE:="false"}
 
 # https://github.com/flant/shell-operator/issues/726
+# https://github.com/flant/shell-operator/blob/main/docs/src/HOOKS.md
 if [[ $1 == "--config" ]]; then
   if [[ "${ENABLE_HOOK_RANCHER_CLUSTERS_TO_ARGOCD_CLUSTERS}" == "true" ]]; then
     cat <<EOF
 configVersion: v1
+settings:
+  executionMinInterval: 60s
+  executionBurst: 1
 kubernetes:
 - apiVersion: management.cattle.io/v3
   kind: Cluster
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 schedule:
 - name: "every 15 min"
   crontab: "*/15 * * * *"
   allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 EOF
   else
     cat <<EOF

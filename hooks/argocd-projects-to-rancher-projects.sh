@@ -17,21 +17,39 @@ set -e
 : ${ARGOCD_PROJECTS_TO_RANCHER_PROJECTS_IGNORE_DEFAULT_PROJECT:="true"}
 
 # https://github.com/flant/shell-operator/issues/726
+# https://github.com/flant/shell-operator/blob/main/docs/src/HOOKS.md
 if [[ $1 == "--config" ]]; then
   if [[ "${ENABLE_HOOK_ARGOCD_PROJECTS_TO_RANCHER_PROJECTS}" == "true" ]]; then
     cat <<EOF
 configVersion: v1
+settings:
+  executionMinInterval: 60s
+  executionBurst: 1
 kubernetes:
 - apiVersion: management.cattle.io/v3
   kind: Cluster
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
+- apiVersion: management.cattle.io/v3
+  kind: Project
+  executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 - apiVersion: argoproj.io/v1alpha1
   kind: AppProject
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 schedule:
 - name: "every 15 min"
   crontab: "*/15 * * * *"
   allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 EOF
   else
     cat <<EOF
@@ -47,6 +65,7 @@ fi
 
 ARGOCD_PROJECTS=$(kubectl -n "${ARGOCD_NAMESPACE}" get appprojects.argoproj.io -o json)
 RANCHER_CLUSTERS=$(kubectl get clusters.management.cattle.io -o json)
+RANCHER_PROJECTS=$(kubectl get projects.management.cattle.io -A -o json)
 
 # iterate rancher clusters and create corresponding argocd clusters
 echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
@@ -104,7 +123,14 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
       continue
     fi
 
-    echo "ensuring ${appProjectName} in ${clusterDisplayName}"
+    rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${appProjectName}" '.items[] | select( .metadata.namespace == $namespace and .spec.displayName == $project )')
+    if [[ -n "${rancherProject}" ]]; then
+      echo "project ${appProjectName} already present in cluster ${clusterResourceName}"
+      # TODO: should probably ensure all the dynamic fields set below match
+      continue
+    fi
+
+    echo "creating project ${appProjectName} in cluster ${clusterDisplayName}"
 
     PROJECT_YAML=$(
       cat <<EOF

@@ -34,24 +34,39 @@ set -e
 : ${K8S_EXTRA_ARGS:=""}
 
 # https://github.com/flant/shell-operator/issues/726
+# https://github.com/flant/shell-operator/blob/main/docs/src/HOOKS.md
 if [[ $1 == "--config" ]]; then
   if [[ "${ENABLE_HOOK_ARGOCD_NAMESPACES_TO_RANCHER_PROJECTS}" == "true" ]]; then
     cat <<EOF
 configVersion: v1
+settings:
+  executionMinInterval: 60s
+  executionBurst: 1
 kubernetes:
 - apiVersion: management.cattle.io/v3
   kind: Cluster
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 - apiVersion: management.cattle.io/v3
   kind: Project
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 - apiVersion: argoproj.io/v1alpha1
   kind: Application
   executeHookOnEvent: [ "Added", "Modified", "Deleted" ]
+  allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 schedule:
 - name: "every 15 min"
   crontab: "*/15 * * * *"
   allowFailure: true
+  queue: "${0}"
+  group: "${0}"
 EOF
   else
     cat <<EOF
@@ -210,6 +225,7 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
       fi
     fi
 
+    # TODO: this query is actually possible to return multiple matches, need to handle that better
     rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${projectName}" '.items[] | select( .metadata.namespace == $namespace and .spec.displayName == $project )')
 
     if [[ -z "${rancherProject}" ]]; then
