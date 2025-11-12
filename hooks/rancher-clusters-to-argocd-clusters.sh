@@ -99,41 +99,42 @@ apply_cluster_filtering() {
 # Fleet mode processing
 if [[ "${FLEET_MODE}" == "true" ]]; then
   echo "Running in Fleet mode"
-  
+
   # Get all clusters from Fleet API
   CLUSTERS=$(kubectl get clusters.fleet.cattle.io -o json -n "${FLEET_NAMESPACE}")
-  
+
   # iterate through all Fleet clusters
   echo $CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
     clusterResourceName=$(echo "${cluster}" | jq -crM '.metadata.name')
     clusterDisplayName=$(echo "${cluster}" | jq -crM '.spec.displayName // .metadata.name')
     echo "Processing Fleet cluster ${clusterResourceName} display name: ${clusterDisplayName}"
-    
+
     if [[ -z "${clusterResourceName}" ]]; then
       echo "Empty cluster, moving on"
       continue
     fi
-    
+
+
     # Apply filtering
     if ! apply_cluster_filtering "${clusterDisplayName}" \
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_EXCLUDE_REGEX}" \
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_INCLUDE_REGEX}"; then
       continue
     fi
-    
+
     # Find corresponding Fleet kubeconfig secret for this cluster
-    KUBECONFIG_SECRET=$(kubectl -n ${FLEET_NAMESPACE} get secrets -l "cluster.x-k8s.io/cluster-name=${clusterResourceName}" -o json | jq -r '.items[] | select(.metadata.name | endswith("-kubeconfig"))')
-    
+    KUBECONFIG_SECRET=$(kubectl -n "${FLEET_NAMESPACE}" get secrets -l "cluster.x-k8s.io/cluster-name=${clusterResourceName}" -o json | jq -r '.items[] | select(.metadata.name | endswith("-kubeconfig"))')
+
     if [[ -z "${KUBECONFIG_SECRET}" ]]; then
       echo "No kubeconfig secret found for cluster ${clusterResourceName}, skipping"
       continue
     fi
-    
+
     echo "Found kubeconfig secret for cluster ${clusterResourceName}"
-    
+
     # Extract the kubeconfig data from the secret
     KUBECONFIG_VALUE=$(echo "${KUBECONFIG_SECRET}" | jq -r '.stringData.value // .data.value')
-    
+
     # If the value is base64 encoded (from .data), decode it
     if [[ -n "${KUBECONFIG_VALUE}" && "${KUBECONFIG_VALUE}" != "null" ]]; then
       if echo "${KUBECONFIG_SECRET}" | jq -e '.data.value' > /dev/null; then
@@ -143,7 +144,7 @@ if [[ "${FLEET_MODE}" == "true" ]]; then
       echo "Failed to extract kubeconfig value for cluster ${clusterResourceName}, skipping"
       continue
     fi
-    
+
     # Extract token from the kubeconfig
     TOKEN=$(echo "${KUBECONFIG_SECRET}" | jq -r '.stringData.token // .data.token')
     if [[ -n "${TOKEN}" && "${TOKEN}" != "null" ]]; then
@@ -154,28 +155,28 @@ if [[ "${FLEET_MODE}" == "true" ]]; then
       # If direct token extraction fails, parse it from the kubeconfig
       TOKEN=$(echo "${KUBECONFIG_VALUE}" | grep -A2 'token:' | tail -n1 | awk '{print $2}')
     fi
-    
+
     if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
       echo "Failed to extract token for cluster ${clusterResourceName}, skipping"
       continue
     fi
-    
+
     # Extract server URL from the kubeconfig
     SERVER_URL=$(echo "${KUBECONFIG_VALUE}" | grep 'server:' | awk '{print $2}')
-    
+
     # Extract CA data from the kubeconfig
     CA_DATA=$(echo "${KUBECONFIG_VALUE}" | grep 'certificate-authority-data:' | awk '{print $2}')
-    
+
     # Get the cluster labels
     clusterLabels=$(echo "${cluster}" | yq eval '.metadata.labels' - -P | sed "s/^/    /g")
-    
+
     # Handle special case for no prefix
     if [[ "${SERVER_NAME_PREFIX}" == "NONE" ]]; then
       CLUSTER_NAME="${clusterDisplayName}${SERVER_NAME_SUFFIX}"
     else
       CLUSTER_NAME="${SERVER_NAME_PREFIX}${clusterDisplayName}${SERVER_NAME_SUFFIX}"
     fi
-    
+
     # Create ArgoCD cluster secret
     SECRET_YAML=$(
       cat <<EOF
@@ -205,12 +206,35 @@ stringData:
     }
 EOF
     )
-    
+
     # Apply the ArgoCD cluster secret
     echo "${SECRET_YAML}" | kubectl -n "${ARGOCD_NAMESPACE}" apply -f -
     echo "Created/updated ArgoCD cluster secret for ${clusterResourceName}"
   done
-  
+
+  # Cleanup orphaned ArgoCD cluster secrets
+  echo "Checking for orphaned ArgoCD cluster secrets..."
+
+  # Get all ArgoCD cluster secrets that were created from Fleet
+  ARGOCD_FLEET_SECRETS=$(kubectl -n "${ARGOCD_NAMESPACE}" get secrets -l fleetImported=true -o json)
+
+  # Check each ArgoCD secret to see if its corresponding Fleet cluster still exists
+  echo "${ARGOCD_FLEET_SECRETS}" | jq -crM '.items[]' | while read -r secret; do
+    secretName=$(echo "${secret}" | jq -crM '.metadata.name')
+
+    # Extract the cluster name from the secret name by removing prefix and suffix
+    clusterName="${secretName#"${SECRET_NAME_PREFIX}"}"
+    clusterName="${clusterName%"${SECRET_NAME_SUFFIX}"}"
+
+    # Check if this cluster still exists in Fleet
+    CLUSTER_EXISTS=$(kubectl get clusters.fleet.cattle.io "${clusterName}" -n "${FLEET_NAMESPACE}" 2>/dev/null)
+
+    if [[ -z "${CLUSTER_EXISTS}" ]]; then
+      echo "Deleting orphaned ArgoCD cluster secret ${secretName} for non-existent Fleet cluster ${clusterName}"
+      kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
+    fi
+  done
+
 else
   # Rancher mode processing
   echo "Running in Rancher mode"
@@ -222,11 +246,13 @@ else
   
   # fetch CA data from cluster
   if [[ -n "${RANCHER_CA_SECRET_NAME}" && -z "${K8S_CA_DATA}" ]]; then
+    NS_ARGS=""
     [[ -n "${RANCHER_CA_SECRET_NS}" ]] && {
       NS_ARGS="-n ${RANCHER_CA_SECRET_NS}"
     }
-    
-    K8S_CA_DATA=$(kubectl ${NS_ARGS} get secrets ${RANCHER_CA_SECRET_NAME} -o json | jq -crM ".data.\"${RANCHER_CA_SECRET_KEY}\"")
+
+    # shellcheck disable=SC2086
+    K8S_CA_DATA=$(kubectl ${NS_ARGS} get secrets "${RANCHER_CA_SECRET_NAME}" -o json | jq -crM ".data.\"${RANCHER_CA_SECRET_KEY}\"")
     
     if [[ -z "${K8S_CA_DATA}" ]]; then
       echo "failed to retrieve K8S_CA_DATA using secret ${RANCHER_CA_SECRET_NS}/${RANCHER_CA_SECRET_NAME}"
@@ -293,8 +319,7 @@ else
       CLUSTER_NAME="${SERVER_NAME_PREFIX}${clusterDisplayName}${SERVER_NAME_SUFFIX}"
     fi
     
-    # this is kube-ca
-    caCert=$(echo "${cluster}" | jq -crM '.status.caCert')
+    # Get cluster labels
     clusterLabels=$(echo "${cluster}" | yq eval '.metadata.labels' - -P | sed "s/^/    /g")
     SECRET_YAML=$(
       cat <<EOF
@@ -325,5 +350,28 @@ stringData:
 EOF
     )
     echo "${SECRET_YAML}" | kubectl -n "${ARGOCD_NAMESPACE}" apply -f -
+  done
+
+  # Cleanup orphaned ArgoCD cluster secrets
+  echo "Checking for orphaned ArgoCD cluster secrets..."
+
+  # Get all ArgoCD cluster secrets that were created from Rancher
+  ARGOCD_RANCHER_SECRETS=$(kubectl -n "${ARGOCD_NAMESPACE}" get secrets -l rancherImported=true -o json)
+
+  # Check each ArgoCD secret to see if its corresponding Rancher cluster still exists
+  echo "${ARGOCD_RANCHER_SECRETS}" | jq -crM '.items[]' | while read -r secret; do
+    secretName=$(echo "${secret}" | jq -crM '.metadata.name')
+
+    # Extract the cluster name from the secret name by removing prefix and suffix
+    clusterName="${secretName#"${SECRET_NAME_PREFIX}"}"
+    clusterName="${clusterName%"${SECRET_NAME_SUFFIX}"}"
+
+    # Check if this cluster still exists in Rancher
+    CLUSTER_EXISTS=$(kubectl get clusters.management.cattle.io "${clusterName}" 2>/dev/null)
+
+    if [[ -z "${CLUSTER_EXISTS}" ]]; then
+      echo "Deleting orphaned ArgoCD cluster secret ${secretName} for non-existent Rancher cluster ${clusterName}"
+      kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
+    fi
   done
 fi
