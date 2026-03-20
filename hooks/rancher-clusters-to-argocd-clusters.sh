@@ -20,6 +20,8 @@ set -e
 : ${FLEET_NAMESPACE:=fleet-default}
 : ${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_EXCLUDE_REGEX:=""}
 : ${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_INCLUDE_REGEX:=""}
+# Label-based exclusion: clusters with this label=value are skipped (e.g. "baind.de/agent-managed=true")
+: ${EXCLUDE_LABEL:=""}
 
 # Rancher-specific configuration
 : ${RANCHER_URI:="https://rancher.cattle-system"}
@@ -120,6 +122,17 @@ if [[ "${FLEET_MODE}" == "true" ]]; then
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_EXCLUDE_REGEX}" \
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_INCLUDE_REGEX}"; then
       continue
+    fi
+
+    # Label-based exclusion (e.g. EXCLUDE_LABEL="baind.de/agent-managed=true")
+    if [[ -n "${EXCLUDE_LABEL}" ]]; then
+      EXCLUDE_KEY="${EXCLUDE_LABEL%%=*}"
+      EXCLUDE_VALUE="${EXCLUDE_LABEL#*=}"
+      LABEL_VALUE=$(echo "${cluster}" | jq -crM --arg key "${EXCLUDE_KEY}" '.metadata.labels[$key] // empty')
+      if [[ "${LABEL_VALUE}" == "${EXCLUDE_VALUE}" ]]; then
+        echo "Ignoring cluster ${clusterDisplayName} due to exclude label ${EXCLUDE_LABEL}"
+        continue
+      fi
     fi
 
     # Find corresponding Fleet kubeconfig secret for this cluster
@@ -227,11 +240,22 @@ EOF
     clusterName="${clusterName%"${SECRET_NAME_SUFFIX}"}"
 
     # Check if this cluster still exists in Fleet
-    CLUSTER_EXISTS=$(kubectl get clusters.fleet.cattle.io "${clusterName}" -n "${FLEET_NAMESPACE}" 2>/dev/null)
-
+    CLUSTER_EXISTS=$(kubectl get clusters.fleet.cattle.io "${clusterName}" -n "${FLEET_NAMESPACE}" -o json 2>/dev/null || true)
     if [[ -z "${CLUSTER_EXISTS}" ]]; then
       echo "Deleting orphaned ArgoCD cluster secret ${secretName} for non-existent Fleet cluster ${clusterName}"
       kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
+      continue
+    fi
+
+    # Delete secrets for clusters that now have the exclude label (migrated to agent)
+    if [[ -n "${EXCLUDE_LABEL}" ]]; then
+      EXCLUDE_KEY="${EXCLUDE_LABEL%%=*}"
+      EXCLUDE_VALUE="${EXCLUDE_LABEL#*=}"
+      LABEL_VALUE=$(echo "${CLUSTER_EXISTS}" | jq -crM --arg key "${EXCLUDE_KEY}" '.metadata.labels[$key] // empty')
+      if [[ "${LABEL_VALUE}" == "${EXCLUDE_VALUE}" ]]; then
+        echo "Deleting ArgoCD cluster secret ${secretName} for agent-managed cluster ${clusterName}"
+        kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
+      fi
     fi
   done
 
@@ -367,7 +391,7 @@ EOF
     clusterName="${clusterName%"${SECRET_NAME_SUFFIX}"}"
 
     # Check if this cluster still exists in Rancher
-    CLUSTER_EXISTS=$(kubectl get clusters.management.cattle.io "${clusterName}" 2>/dev/null)
+    CLUSTER_EXISTS=$(kubectl get clusters.management.cattle.io "${clusterName}" 2>/dev/null || true)
 
     if [[ -z "${CLUSTER_EXISTS}" ]]; then
       echo "Deleting orphaned ArgoCD cluster secret ${secretName} for non-existent Rancher cluster ${clusterName}"

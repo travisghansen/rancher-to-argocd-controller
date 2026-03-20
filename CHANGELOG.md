@@ -1,5 +1,6 @@
 # v0.5.0
 
+- add cleanup logic to remove orphaned ArgoCD cluster secrets when Fleet/Rancher clusters are deleted
 - add support for deriving ArgoCD clusters from fleet clusters instead (set FLEET_MODE="true")
 - add support for omitting cluster name prefix (set SERVER_NAME_PREFIX="NONE")
 
