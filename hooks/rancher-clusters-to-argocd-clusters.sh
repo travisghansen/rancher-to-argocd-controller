@@ -15,13 +15,16 @@ set -e
 : ${SECRET_NAME_SUFFIX:=""}
 : ${ARGOCD_NAMESPACE:=argocd}
 : ${K8S_INSECURE:="false"}
+# Comma-separated list of key=value label matchers. Clusters matching ALL labels
+# will have their credentials stripped from the ArgoCD secret (metadata is kept).
+# This is useful for argocd-agent managed clusters where the central application
+# controller should not create informers/watches.
+: ${EXCLUDE_LABELS:=""}
 
 # Fleet-specific configuration
 : ${FLEET_NAMESPACE:=fleet-default}
 : ${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_EXCLUDE_REGEX:=""}
 : ${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_INCLUDE_REGEX:=""}
-# Label-based exclusion: clusters with this label=value are skipped (e.g. "baind.de/agent-managed=true")
-: ${EXCLUDE_LABEL:=""}
 
 # Rancher-specific configuration
 : ${RANCHER_URI:="https://rancher.cattle-system"}
@@ -98,6 +101,29 @@ apply_cluster_filtering() {
   return 0
 }
 
+# Check if a cluster's labels match all EXCLUDE_LABELS entries.
+# Returns 0 (true) if credentials should be stripped, 1 otherwise.
+should_strip_credentials() {
+  local cluster_json="$1"
+
+  if [[ -z "${EXCLUDE_LABELS}" ]]; then
+    return 1
+  fi
+
+  IFS=',' read -ra label_pairs <<< "${EXCLUDE_LABELS}"
+  for pair in "${label_pairs[@]}"; do
+    local key="${pair%%=*}"
+    local expected_value="${pair#*=}"
+    local actual_value
+    actual_value=$(echo "${cluster_json}" | jq -r --arg k "${key}" '.metadata.labels[$k] // empty')
+    if [[ "${actual_value}" != "${expected_value}" ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
 # Fleet mode processing
 if [[ "${FLEET_MODE}" == "true" ]]; then
   echo "Running in Fleet mode"
@@ -122,17 +148,6 @@ if [[ "${FLEET_MODE}" == "true" ]]; then
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_EXCLUDE_REGEX}" \
          "${FLEET_CLUSTERS_TO_ARGOCD_CLUSTERS_CLUSTER_NAME_INCLUDE_REGEX}"; then
       continue
-    fi
-
-    # Label-based exclusion (e.g. EXCLUDE_LABEL="baind.de/agent-managed=true")
-    if [[ -n "${EXCLUDE_LABEL}" ]]; then
-      EXCLUDE_KEY="${EXCLUDE_LABEL%%=*}"
-      EXCLUDE_VALUE="${EXCLUDE_LABEL#*=}"
-      LABEL_VALUE=$(echo "${cluster}" | jq -crM --arg key "${EXCLUDE_KEY}" '.metadata.labels[$key] // empty')
-      if [[ "${LABEL_VALUE}" == "${EXCLUDE_VALUE}" ]]; then
-        echo "Ignoring cluster ${clusterDisplayName} due to exclude label ${EXCLUDE_LABEL}"
-        continue
-      fi
     fi
 
     # Find corresponding Fleet kubeconfig secret for this cluster
@@ -190,6 +205,25 @@ if [[ "${FLEET_MODE}" == "true" ]]; then
       CLUSTER_NAME="${SERVER_NAME_PREFIX}${clusterDisplayName}${SERVER_NAME_SUFFIX}"
     fi
 
+    # Build the config field: strip credentials for excluded clusters so the
+    # central application controller won't create informers/watches.
+    if should_strip_credentials "${cluster}"; then
+      echo "Stripping credentials for agent-managed cluster ${clusterDisplayName}"
+      CONFIG_FIELD=""
+    else
+      CONFIG_FIELD=$(cat <<CFGEOF
+  config: |
+    {
+      "bearerToken": "${TOKEN}",
+      "tlsClientConfig": {
+        "insecure": ${K8S_INSECURE},
+        "caData": "${CA_DATA}"
+      }
+    }
+CFGEOF
+      )
+    fi
+
     # Create ArgoCD cluster secret
     SECRET_YAML=$(
       cat <<EOF
@@ -209,14 +243,7 @@ type: Opaque
 stringData:
   name: "${CLUSTER_NAME}"
   server: "${SERVER_URL}"
-  config: |
-    {
-      "bearerToken": "${TOKEN}",
-      "tlsClientConfig": {
-        "insecure": ${K8S_INSECURE},
-        "caData": "${CA_DATA}"
-      }
-    }
+${CONFIG_FIELD}
 EOF
     )
 
@@ -240,22 +267,10 @@ EOF
     clusterName="${clusterName%"${SECRET_NAME_SUFFIX}"}"
 
     # Check if this cluster still exists in Fleet
-    CLUSTER_EXISTS=$(kubectl get clusters.fleet.cattle.io "${clusterName}" -n "${FLEET_NAMESPACE}" -o json 2>/dev/null || true)
+    CLUSTER_EXISTS=$(kubectl get clusters.fleet.cattle.io "${clusterName}" -n "${FLEET_NAMESPACE}" 2>/dev/null || true)
     if [[ -z "${CLUSTER_EXISTS}" ]]; then
       echo "Deleting orphaned ArgoCD cluster secret ${secretName} for non-existent Fleet cluster ${clusterName}"
       kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
-      continue
-    fi
-
-    # Delete secrets for clusters that now have the exclude label (migrated to agent)
-    if [[ -n "${EXCLUDE_LABEL}" ]]; then
-      EXCLUDE_KEY="${EXCLUDE_LABEL%%=*}"
-      EXCLUDE_VALUE="${EXCLUDE_LABEL#*=}"
-      LABEL_VALUE=$(echo "${CLUSTER_EXISTS}" | jq -crM --arg key "${EXCLUDE_KEY}" '.metadata.labels[$key] // empty')
-      if [[ "${LABEL_VALUE}" == "${EXCLUDE_VALUE}" ]]; then
-        echo "Deleting ArgoCD cluster secret ${secretName} for agent-managed cluster ${clusterName}"
-        kubectl -n "${ARGOCD_NAMESPACE}" delete secret "${secretName}"
-      fi
     fi
   done
 
@@ -345,6 +360,25 @@ else
     
     # Get cluster labels
     clusterLabels=$(echo "${cluster}" | yq eval '.metadata.labels' - -P | sed "s/^/    /g")
+
+    # Strip credentials for excluded clusters
+    if should_strip_credentials "${cluster}"; then
+      echo "Stripping credentials for agent-managed cluster ${clusterDisplayName}"
+      CONFIG_FIELD=""
+    else
+      CONFIG_FIELD=$(cat <<CFGEOF
+  config: |
+    {
+      "bearerToken": "${K8S_TOKEN}",
+      "tlsClientConfig": {
+        "insecure": ${K8S_INSECURE},
+        "caData": "${K8S_CA_DATA}"
+      }
+    }
+CFGEOF
+      )
+    fi
+
     SECRET_YAML=$(
       cat <<EOF
 ---
@@ -363,14 +397,7 @@ type: Opaque
 stringData:
   name: "${CLUSTER_NAME}"
   server: "${RANCHER_URI}/k8s/clusters/${clusterResourceName}"
-  config: |
-    {
-      "bearerToken": "${K8S_TOKEN}",
-      "tlsClientConfig": {
-        "insecure": ${K8S_INSECURE},
-        "caData": "${K8S_CA_DATA}"
-      }
-    }
+${CONFIG_FIELD}
 EOF
     )
     echo "${SECRET_YAML}" | kubectl -n "${ARGOCD_NAMESPACE}" apply -f -
