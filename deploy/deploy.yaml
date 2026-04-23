@@ -20,6 +20,22 @@ rules:
       - "get"
       - "watch"
       - "list"
+  # If you want to use the fleet hook
+  - apiGroups:
+      - fleet.cattle.io
+    resources:
+      - "clusters"
+    verbs:
+      - "get"
+      - "watch"
+      - "list"
+  # For retrieving the kubeconf secret, typically in fleet-default namespace
+  - apiGroups:
+      - ""
+    resources:
+      - "secrets"
+    verbs:
+      - "get"
 # if you want it to automatically fetch secret data from another namespace
 # ie: rancher tls ca
 #  - apiGroups:
@@ -102,3 +118,10 @@ spec:
               value: "dev"
             - name: RANCHER_URI
               value: "https://rancher.example.com"
+            # derive argocd clusters from rancher clusters using the bootstrap admin token
+            - name: ENABLE_HOOK_RANCHER_CLUSTERS_TO_ARGOCD_CLUSTERS
+              value: "false"
+            # derive argocd clusters from cluster.fleet.cattle.io instead of using the admin token. 
+            # this mode will also apply the labels from the original fleet cluster object to ArgoCD clusters.
+            - name: FLEET_MODE
+              value: "false"
