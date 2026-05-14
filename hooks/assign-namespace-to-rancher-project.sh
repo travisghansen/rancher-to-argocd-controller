@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e
-#set -x
+# set -x
 
 : ${ENABLE_HOOK_ARGOCD_NAMESPACES_TO_RANCHER_PROJECTS:="false"}
 
@@ -102,7 +102,7 @@ if [[ -n "${RANCHER_CA_SECRET_NAME}" && -z "${K8S_CA_DATA}" ]]; then
 fi
 
 # sanely handle 'remote' cluster CA
-if [[ -n "${K8S_CA_DATA}" ]]; then
+if [[ -n "${K8S_CA_DATA}" && "${K8S_INSECURE}" == "false" ]]; then
   echo "${K8S_CA_DATA}" | base64 -d >/tmp/rancher-ca-tls.crt
   K8S_EXTRA_ARGS+=" --certificate-authority=/tmp/rancher-ca-tls.crt "
 fi
@@ -198,7 +198,7 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
 
         if [[ -n "${projectName}" ]]; then
           :
-          echo "using project name ${projectName} from argocd application label"
+          echo "using project name ${projectName} from argocd application .spec.project field"
         fi
       fi
     fi
@@ -226,7 +226,13 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
     fi
 
     # TODO: this query is actually possible to return multiple matches, need to handle that better
-    rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${projectName}" '.items[] | select( .metadata.namespace == $namespace and .spec.displayName == $project )')
+    # first check for exact match using metadata.name and spec.displayName
+    rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${projectName}" '.items[] | select( .metadata.namespace == $namespace and .metadata.name == $project and .spec.displayName == $project )')
+
+    # fallback to using only displayName
+    if [[ -z "${rancherProject}" ]]; then
+      rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${projectName}" '.items[] | select( .metadata.namespace == $namespace and .spec.displayName == $project )')
+    fi
 
     if [[ -z "${rancherProject}" ]]; then
       echo "no corresponding rancher project ${projectName}, skipping"

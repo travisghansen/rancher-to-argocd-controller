@@ -1,3 +1,10 @@
+# v0.4.4
+
+Released 2026-05-14
+
+- new hook `argocd-permissions-to-rancher-permissions.sh` to sync permissions from argocd to rancher
+- minor cleanups
+
 # v0.4.3
 
 Released 2025-06-24

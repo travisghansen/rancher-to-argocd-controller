@@ -98,6 +98,7 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
     fi
   fi
 
+  # iterate argocd projects to create corresponding rancher projects
   echo $ARGOCD_PROJECTS | jq -crM '.items[]' | while read -r appProject; do
     appProjectName=$(echo "${appProject}" | jq -crM '.metadata.name')
     projectDescription=$(echo "${appProject}" | jq -crM '.spec.description | select (.!=null)')
@@ -126,14 +127,11 @@ echo $RANCHER_CLUSTERS | jq -crM '.items[]' | while read -r cluster; do
     rancherProject=$(echo $RANCHER_PROJECTS | jq -crM --arg namespace "${clusterResourceName}" --arg project "${appProjectName}" '.items[] | select( .metadata.namespace == $namespace and .spec.displayName == $project )')
     if [[ -n "${rancherProject}" ]]; then
       echo "project ${appProjectName} already present in cluster ${clusterResourceName}"
-      # TODO: should probably ensure all the dynamic fields set below match
-      continue
-    fi
+    else
+      echo "creating project ${appProjectName} in cluster ${clusterDisplayName}"
 
-    echo "creating project ${appProjectName} in cluster ${clusterDisplayName}"
-
-    PROJECT_YAML=$(
-      cat <<EOF
+      PROJECT_YAML=$(
+        cat <<EOF
 ---
 apiVersion: management.cattle.io/v3
 kind: Project
@@ -153,10 +151,11 @@ spec:
     limit: {}
     usedLimit: {}
 EOF
-    )
+      )
 
-    #echo "${PROJECT_YAML}"
-    echo "${PROJECT_YAML}" | kubectl apply -f -
+      #echo "${PROJECT_YAML}"
+      echo "${PROJECT_YAML}" | kubectl apply -f -
+    fi
   done
 done
 

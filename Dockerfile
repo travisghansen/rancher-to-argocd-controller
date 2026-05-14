@@ -1,15 +1,15 @@
-FROM flant/shell-operator:v1.6.2
+FROM flant/shell-operator:v1.16.6
 
 RUN \
   case $(uname -m) in \
   x86_64) \
-  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64' \
+  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_amd64' \
   ;; \
   armv7l) \
-  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_arm' \
+  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_arm' \
   ;; \
   aarch64) \
-  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_arm64' \
+  wget -O /usr/local/bin/yq 'https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_arm64' \
   ;; \
   *) \
   exit 1 \

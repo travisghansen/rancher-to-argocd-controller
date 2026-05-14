@@ -16,10 +16,25 @@ rules:
       - "clusters"
       - "users"
       - "tokens"
+      - "projectroletemplatebindings"
     verbs:
       - "get"
       - "watch"
       - "list"
+
+  - apiGroups:
+      - management.cattle.io
+    resources:
+      - "tokens"
+      - "projects"
+      - "projectroletemplatebindings"
+    verbs:
+      - "create"
+      - "update"
+      - "patch"
+      - "delete"
+
+
 # if you want it to automatically fetch secret data from another namespace
 # ie: rancher tls ca
 #  - apiGroups:
